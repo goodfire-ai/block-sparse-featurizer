@@ -29,6 +29,9 @@ env/
 *.swp
 *~
 
+# Claude Code
+.claude/
+
 # OS cruft
 .DS_Store
 Thumbs.db

@@ -52,7 +52,7 @@ def make_colorize(proj, per_axis=False, saturation=1.0):
     return f
 
 
-def manifold_ax(ax, proj, rgb, point_size=4.0):
+def manifold_ax(ax, proj, rgb, point_size=4.0, elev=16, azim=-60):
     """3D scatter: square floor below the cloud + shadow, no axes, halo behind
     each point. Every point is the same `point_size`; its INTENSITY (alpha) is
     its norm / max norm -- near-centre (low-norm) points fade, rim points are
@@ -89,7 +89,7 @@ def manifold_ax(ax, proj, rgb, point_size=4.0):
         ax.axis('equal')
     except Exception:
         pass
-    ax.view_init(elev=16, azim=-60)
+    ax.view_init(elev=elev, azim=azim)
     ax.set_axis_off()
 
 
@@ -109,11 +109,15 @@ def overlay(ax, image, z_patch, atoms_g, mean, comps, colorize, grid):
     ax.set_xticks([]); ax.set_yticks([])
 
 
+_DEFAULT_VIEWS = [(16, -60), (16, 60), (16, 180)]
+
+
 def plot_concepts(z, atoms, images, concepts, grid, n_img=10, ncol_img=5,
                   per_axis_rgb=False, clip=98.0, saturation=1.0,
                   drop_low_norm=0.0, max_points=5000,
-                  point_size=4.0, concept_gap=0.6):
-    """One band per concept: 3D manifold (left) + an `n_img` grid of overlays.
+                  point_size=4.0, concept_gap=0.6,
+                  views=_DEFAULT_VIEWS):
+    """One band per concept: 3D manifold views (left) + an `n_img` grid of overlays.
 
     z       (N, G, K)  gated codes (model.encode(x))
     atoms   (G, K, d)  decoder atoms (model.atoms())
@@ -124,6 +128,7 @@ def plot_concepts(z, atoms, images, concepts, grid, n_img=10, ncol_img=5,
     point_size         uniform size of every 3D point (halo is 2x this).
     concept_gap        height (in row-units) of the blank spacer row inserted
                        between consecutive concept bands.
+    views              list of (elev, azim) tuples — one subplot per view.
     """
     P = grid * grid
     # (N, G)
@@ -133,8 +138,8 @@ def plot_concepts(z, atoms, images, concepts, grid, n_img=10, ncol_img=5,
 
     # image rows per concept
     nrow_img = int(np.ceil(n_img / ncol_img))
-    # manifold spans 2 columns
-    mcol = 2
+    # one column per manifold view
+    mcol = len(views)
     ncols = mcol + ncol_img
     n_con = len(concepts)
     # one thin blank spacer row between consecutive concepts (none after last)
@@ -145,28 +150,33 @@ def plot_concepts(z, atoms, images, concepts, grid, n_img=10, ncol_img=5,
         height_ratios += [1.0] * nrow_img
         if r < n_con - 1:
             height_ratios += [concept_gap]
-    gs = GridSpec(total_rows, ncols, height_ratios=height_ratios)
-    fig = plt.figure(figsize=(1.7 * ncols, 1.7 * sum(height_ratios)))
+    col_widths = [5.5] * mcol + [1.5] * ncol_img
+    gs = GridSpec(total_rows, ncols, height_ratios=height_ratios,
+                  width_ratios=col_widths, hspace=0.02, wspace=0.02)
+    fig = plt.figure(figsize=(sum(col_widths), 3.5 * sum(height_ratios)))
 
     for r, g in enumerate(concepts):
         r0 = r * rows_per
-        ax = fig.add_subplot(gs[r0:r0 + nrow_img, 0:mcol], projection='3d')
         idx = np.where(heat[:, g] > 1e-6)[0]
         # drop the lowest-norm firing points
         if drop_low_norm > 0 and idx.size > 8:
             keep = heat[idx, g] >= np.quantile(heat[idx, g], drop_low_norm)
             idx = idx[keep]
         if idx.size < 8:
-            ax.set_axis_off()
+            for v in range(mcol):
+                fig.add_subplot(gs[r0:r0 + nrow_img, v], projection='3d').set_axis_off()
             continue
         sub = idx if idx.size <= max_points else np.random.choice(idx, max_points, replace=False)
         # (n, d) contributions, then PCA-project to 3D
         c = z[sub, g, :] @ atoms[g]
         mean, comps = pca_fit(c, 3)
         proj = (c - mean) @ comps.T
-        proj = radial_clip(proj, clip)          # clip top norms at the clip-th pct (floor 0)
+        proj = radial_clip(proj, clip)
         colorize = make_colorize(proj, per_axis_rgb, saturation)
-        manifold_ax(ax, proj, colorize(proj), point_size=point_size)
+        rgb = colorize(proj)
+        for v, (elev, azim) in enumerate(views):
+            ax = fig.add_subplot(gs[r0:r0 + nrow_img, v], projection='3d')
+            manifold_ax(ax, proj, rgb, point_size=point_size, elev=elev, azim=azim)
 
         top_imgs = np.argsort(-(heat_img[:, :, g] ** 2).sum(1))[:n_img]
         for j, ii in enumerate(top_imgs):

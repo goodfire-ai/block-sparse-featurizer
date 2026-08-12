@@ -10,6 +10,7 @@ orthonormal, so the decoder needs no normalisation.
 """
 import torch
 import torch.nn as nn
+from einops import rearrange
 
 from .base import BSF, group_topk
 
@@ -29,14 +30,14 @@ class GrassmannianBSF(BSF):
     def decoder_atoms(self):
         # (n_groups, d, group_size)
         B, _ = torch.linalg.qr(self.B_raw)
-        return B.permute(0, 2, 1).reshape(-1, self.d)
+        return rearrange(B, 'g d s -> (g s) d')
 
     def encode(self, x):
         # (n_groups * group_size, d)
         atoms = self.decoder_atoms()
         # tied encoder = gamma_g * D, one gamma per concept
-        z = (x @ atoms.t()).reshape(-1, self.n_groups, self.group_size)
-        z = self.gamma.view(1, self.n_groups, 1) * z
+        z = rearrange(x @ atoms.t(), 'n (g s) -> n g s', g=self.n_groups, s=self.group_size)
+        z = z * self.gamma[None, :, None]
         mask = group_topk(z.norm(dim=-1), self.l0)
         return z * mask.unsqueeze(-1)
 

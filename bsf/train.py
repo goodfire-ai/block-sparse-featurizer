@@ -29,12 +29,21 @@ def l0_dead(model, x):
 
 
 def train(model, x, *, epochs=40, lr=4e-4, batch_size=2048, snr=0.1,
-          device=None, log_every=5):
-    """Train `model` on activations `x` (N, d). Returns the trained model."""
+          warmup=0.05, device=None, log_every=5):
+    """Train `model` on activations `x` (N, d). Returns the trained model.
+
+    `warmup` fraction of epochs used for linear LR warm-up, followed by cosine
+    decay to 0.
+    """
     device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
     model.to(device)
     x = torch.as_tensor(x, dtype=torch.float32)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+    n_batches_per_epoch = max(1, x.shape[0] // batch_size)
+    total_steps = epochs * n_batches_per_epoch
+    sched = torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=lr, total_steps=total_steps,
+        pct_start=warmup, anneal_strategy='cos', div_factor=25, final_div_factor=1e4)
     n = x.shape[0]
 
     for ep in range(1, epochs + 1):
@@ -50,6 +59,7 @@ def train(model, x, *, epochs=40, lr=4e-4, batch_size=2048, snr=0.1,
             opt.zero_grad()
             loss.backward()
             opt.step()
+            sched.step()
             model.normalize_decoder()
             running += float(loss.item())
             n_batches += 1

@@ -9,6 +9,7 @@ what `loss` it optimises.
 """
 import torch
 import torch.nn as nn
+from einops import rearrange
 
 
 def group_topk(group_norms, l0):
@@ -19,10 +20,11 @@ def group_topk(group_norms, l0):
 
 
 def unit_blocks(W, n_groups, group_size, eps=1e-8):
-    """Scale each (group_size, d) decoder block to unit Frobenius norm."""
-    Wb = W.reshape(n_groups, group_size, -1)
-    norm = Wb.flatten(1).norm(dim=1).clamp_min(eps).reshape(n_groups, 1, 1)
-    return (Wb / norm).reshape(W.shape)
+    """Normalise each decoder atom to unit L2 norm."""
+    Wb = rearrange(W, '(g s) d -> g s d', g=n_groups, s=group_size)
+    norm = Wb.norm(dim=2, keepdim=True).clamp_min(eps)
+    Wb_normed = Wb / norm
+    return rearrange(Wb_normed, 'g s d -> (g s) d')
 
 
 class BSF(nn.Module):
@@ -51,7 +53,7 @@ class BSF(nn.Module):
         return self.W_dec
 
     def decode(self, z):
-        return z.reshape(z.shape[0], -1) @ self.decoder_atoms()
+        return rearrange(z, 'n g s -> n (g s)') @ self.decoder_atoms()
 
     def forward(self, x):
         z = self.encode(x)
@@ -59,10 +61,10 @@ class BSF(nn.Module):
 
     # per-concept decoder atoms (n_groups, group_size, d) for the viz
     def atoms(self):
-        return self.decoder_atoms().detach().reshape(
-            self.n_groups, self.group_size, self.d)
+        W = self.decoder_atoms().detach()
+        return rearrange(W, '(g s) d -> g s d', g=self.n_groups, s=self.group_size)
 
-    # unit-Frobenius the decoder blocks (no-op for an orthonormal decoder)
+    # unit-L2 each decoder atom (no-op for an orthonormal decoder)
     @torch.no_grad()
     def normalize_decoder(self):
         if hasattr(self, 'W_dec'):

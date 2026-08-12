@@ -7,6 +7,7 @@ decoder are untied; sparsity is enforced by construction (no penalty). With
 """
 import torch
 import torch.nn as nn
+from einops import rearrange
 
 from .base import BSF, group_topk, unit_blocks
 
@@ -22,8 +23,8 @@ class VanillaBSF(BSF):
         self.b_enc = nn.Parameter(torch.zeros(n_groups * group_size))
 
     def encode(self, x):
-        a = (x @ self.W_enc + self.b_enc)
-        a = a.reshape(-1, self.n_groups, self.group_size)
+        a = x @ self.W_enc + self.b_enc
+        a = rearrange(a, 'n (g s) -> n g s', g=self.n_groups, s=self.group_size)
         # per-sample block TopK
         mask = group_topk(a.norm(dim=-1), self.l0)
         return a * mask.unsqueeze(-1)

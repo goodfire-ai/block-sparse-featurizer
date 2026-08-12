@@ -22,6 +22,7 @@ For new experiments the default variant is recommended.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 
 from .base import BSF, unit_blocks
 
@@ -111,7 +112,8 @@ class GroupLassoBSF(BSF):
 
     
     def preact(self, x):
-        return (x @ self.W_enc + self.b_enc).reshape(-1, self.n_groups, self.group_size)
+        a = x @ self.W_enc + self.b_enc
+        return rearrange(a, 'n (g s) -> n g s', g=self.n_groups, s=self.group_size)
 
     def encode(self, x):
         a = self.preact(x)
