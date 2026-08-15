@@ -6,7 +6,8 @@ decoder/forward interface (`BSF`), and train with one agnostic trainer:
 
     VanillaBSF      free encoder + per-sample block TopK
     GrassmannianBSF tied orthonormal frames + block TopK
-    GroupLassoBSF   free encoder + thresholded block gate, theta learned by STE
+    GroupLassoBSF   free encoder + block JumpReLU gate, theta learned by STE,
+                    sparsity set as a target L0
 """
 from .base import BSF
 from .vanilla import VanillaBSF

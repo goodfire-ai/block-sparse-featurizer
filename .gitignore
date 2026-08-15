@@ -40,6 +40,8 @@ Thumbs.db
 scratch/
 outputs/
 *.log
+logs/
+temp/
 
 # NOTE: data assets that ship with the repo are tracked on purpose and are
 # intentionally NOT ignored: rabbit.npz, bsf/pos_mean.npy, assets/*.png
