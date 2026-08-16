@@ -1,0 +1,113 @@
+From 385311f286014ceee162f7142843e0b6ed8b128d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 16 Aug 2026 23:46:12 +0000
+Subject: [PATCH] prompts: instruct informative log narration in interactive
+ and batch compute
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Every submitted job must narrate itself in its logs: a startup banner
+(phase, run identity, output destination), bounded progress lines during
+long stages, one line per phase transition, an exit summary naming
+results and artifact paths, errors logged with the context that produced
+them, and unbuffered output. Interactive srun / run_in_on_demand_session
+commands follow the same rule at command scale: print what the command
+checks and end with a named result line.
+
+The rule is owned by the compute_execution fragment (per the
+one-authoritative-statement convention); the line-level recipe lives in
+the /slurm skill's new 'Log narration' section; the live interactive-mode
+block gains one reinforcing sentence in its shared tail (rendered by both
+the Slurm and on-demand arms).
+
+Context: #public-silico-feedback 2026-08-14 — 'we should probably
+instruct Silico to give more informative logs', and the follow-up that
+interactive worker sessions are the least visible surface.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Kx9FKL3kuASgoaWy6XoN8u
+---
+ SILICO_WORKER.md                              |  2 +-
+ plugins/worker/skills/slurm/SKILL.md          | 14 +++++++++++++-
+ silico/agent_server/image_pull.py             |  3 +++
+ silico/prompts/fragments/compute_execution.md |  4 ++++
+ 4 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/SILICO_WORKER.md b/SILICO_WORKER.md
+index bd2df46..2f76bd7 100644
+--- a/SILICO_WORKER.md
++++ b/SILICO_WORKER.md
+@@ -226,7 +226,7 @@ Pair quantitative interpretability claims with representative inputs and outputs
+ 
+ {{fragment:compute_execution}}
+ 
+-Before the first allocation or submission, load `/slurm`. Interactive iteration is the normal mode; the live Compute execution mode owns the interactive-vs-batch split. `/slurm` owns iteration commands, telemetry recipes, wall-time and ETA mechanics, parallel width, arrays, multi-node topology, retained-volume reuse, and batch tuning. Follow the live mode rather than examples copied from plans or skills.
++Before the first allocation or submission, load `/slurm`. Interactive iteration is the normal mode; the live Compute execution mode owns the interactive-vs-batch split. `/slurm` owns iteration commands, telemetry and log-narration recipes, wall-time and ETA mechanics, parallel width, arrays, multi-node topology, retained-volume reuse, and batch tuning. Follow the live mode rather than examples copied from plans or skills.
+ 
+ Where the live mode advertises Slurm lifecycle commands (`salloc`, `srun`, `squeue`, `scancel`, `sacct`, `scontrol`, `sinfo`), call them as the first word of a shell command. On-demand compute uses the session and job tools named by the live mode instead; its Slurm shims refuse. Production submission is a tool call. Use the advertised submit tool, then park with `await_slurm_job`; never poll. Between interactive commands, stage and checkpoint coherent changes before the session expires.
+ 
+diff --git a/plugins/worker/skills/slurm/SKILL.md b/plugins/worker/skills/slurm/SKILL.md
+index 2ebb030..0564598 100644
+--- a/plugins/worker/skills/slurm/SKILL.md
++++ b/plugins/worker/skills/slurm/SKILL.md
+@@ -2,7 +2,7 @@
+ name: slurm
+ display-name: Cluster Compute
+ description: |
+-  Load before the first interactive allocation or batch submission. The how-to for interactive-first iteration, step-level telemetry, arrays, multi-node launches, cross-job artifact handoff, wall-time and batch-size tuning, and experiment ETA/checkpoints. The worker prompt owns the execution and safety contracts.
++  Load before the first interactive allocation or batch submission. The how-to for interactive-first iteration, step-level telemetry, log narration, arrays, multi-node launches, cross-job artifact handoff, wall-time and batch-size tuning, and experiment ETA/checkpoints. The worker prompt owns the execution and safety contracts.
+ user-invocable: true
+ allowed-tools: Read
+ ---
+@@ -64,6 +64,18 @@ The only acceptable jobs without telemetry are smoke tests, one-shot inference (
+ 
+ **Telemetry is the heartbeat; the checkpoint timeline is the changelog.** During active work, checkpoint each completed major step or coherent validated change instead of bundling several phases into one later entry. After a batch-submission checkpoint, elapsed time and unchanged `RUNNING`/`PENDING` belong only in telemetry, Resource Usage, and ETA. Write again when phase/state, interpretation, result, error, or decision changes. A healthy multi-hour batch job needs no periodic checkpoint.
+ 
++## Log narration
++
++Telemetry feeds the progress bar; the job log is what the researcher opens next to it, and it must tell the run's story unaided. For every submitted job:
++
++- **Startup banner before slow work begins:** phase, model/checkpoint, data and split, effective batch geometry, world size, output root. A crash after the banner is diagnosable; a crash before any output is a blank card.
++- **Bounded progress lines:** step/total, the run's key metric, and current throughput, landing at least every few minutes during long stages — size the print stride to the work, never per-step. Reuse the telemetry `phase=` labels so the log and the progress bar tell one story.
++- **Phase transitions and exit:** one line entering each phase; a final summary naming what was produced, item counts, and the artifact paths written. Greppable `RESULT metric=value` lines end ambiguity about where numbers came from.
++- **Errors with context:** log rank, shard, batch or item id, and the operative config values with the traceback. On multi-rank jobs prefix every line with the rank; an unprefixed interleaved log cannot attribute a failure.
++- **Unbuffered output:** set `PYTHONUNBUFFERED=1` in the job environment or `flush=True` on prints. A fully buffered job looks hung for hours, then dumps everything at exit.
++
++Interactive `srun`/`run_in_on_demand_session` commands follow the same rule at command scale: print what the command is checking before the work, end with a named result line, and give a long smoke the same bounded progress lines. Never print credential values or tensor contents anywhere.
++
+ ## Wall time
+ 
+ **Set a realistic job maximum with measured margin.** Use `resources.time_minutes` for managed cluster jobs, `max_runtime_seconds` for on-demand jobs, and `#SBATCH --time` or native `sbatch_options` only for `submit_slurm_job`. The scheduler/provider kills a job at its limit, and the request can affect scheduling. Use smoke test throughput or a comparable prior run plus setup/eval overhead and ordinary margin.
+diff --git a/silico/agent_server/image_pull.py b/silico/agent_server/image_pull.py
+index e01b615..2ca91a2 100644
+--- a/silico/agent_server/image_pull.py
++++ b/silico/agent_server/image_pull.py
+@@ -1027,6 +1027,9 @@ def format_compute_execution_mode(catalog: dict[str, Any]) -> str:
+         f"bounded {command_singular} — goes through this mode's submission tool as a batch job with an honest "
+         "time limit, then park with `await_slurm_job`. The session is for iteration, probes, "
+         "debugging, and the one consolidated smoke.\n\n"
++        "Make each command's output self-describing: print what it checks and end with a "
++        "named result line, with bounded progress prints during a longer command — a probe "
++        "that succeeds silently proves nothing, and bounded silence reads as a hang.\n\n"
+         "Multiple intentional sessions are allowed when the task genuinely needs "
+         "independent resource shapes; each is separately admitted, metered, bounded, and addressed "
+         "by its own session id. Reuse an existing session when it already has the right resources "
+diff --git a/silico/prompts/fragments/compute_execution.md b/silico/prompts/fragments/compute_execution.md
+index 40cc6e9..89f8fa7 100644
+--- a/silico/prompts/fragments/compute_execution.md
++++ b/silico/prompts/fragments/compute_execution.md
+@@ -24,6 +24,10 @@ Submitted jobs receive a delivered worktree snapshot; each interactive command r
+ 
+ Never bound long compute with a Bash transport timeout. Give the job its native maximum, checkpoint resumable progress, trap `SIGTERM`/`SIGINT`, and use `await_slurm_job` to wait and never poll. For on-demand jobs, this wake waits until output flow-back either completes or fails explicitly; a successful wake makes artifact reads and `reuse_volume_from_job_id` safe from an in-progress-upload race. When woken, inspect terminal state and logs before interpreting the result; also inspect the flow-back outcome, then checkpoint any changed result or state.
+ 
++#### Narrate work in its logs
++
++A job's stdout/stderr is the researcher's live window into the run; silence is indistinguishable from a hang. Every submitted job prints a startup banner naming the phase, run identity (model, data, key hyperparameters), and output destination before slow work begins; a bounded progress line at least every few minutes during long stages (step or item count, key metric, throughput); one line at each phase transition; and an exit summary naming results, counts, and artifact paths. Run Python unbuffered or flush prints so lines appear when written. Log an error with the context that produced it — rank, shard, item, operative config — never as a bare traceback. Interactive commands follow the same rule at command scale: print what the command checks, end with a named result line, and give a longer command the same bounded progress prints; a silently succeeding probe is not evidence. Keep cadence bounded: no per-step spam and no tensor dumps. Telemetry owns progress bars; logs carry the story. `/slurm` owns the line-level recipe.
++
+ #### Submission failures and duplicate safety
+ 
+ For ordinary pre-entrypoint infrastructure failures, follow the worker's two-retry policy. Use the paced policy here only when the error begins `Compute cluster unreachable` or a structured receipt explicitly marks a connectivity failure. The platform converts recognized SSH and rsync failures into that classification; do not infer connectivity from an unclassified raw message. A generic delivery failure, local deadline, scheduler resource/partition refusal, or request error is not connectivity. Retry the unchanged payload every few minutes initially, then back off toward hourly with `schedule_wakeup`, ending the turn between attempts. Continue until recovery; do not abandon the retry loop autonomously. After about 30 minutes, write one researcher-facing checkpoint that the cluster is unreachable and automatic retries continue; write no further outage checkpoints until recovery.
+-- 
+2.43.0
+
