@@ -14,9 +14,9 @@ from .vanilla import VanillaBSF
 from .grassmannian import GrassmannianBSF
 from .group_lasso import GroupLassoBSF
 from .train import train, recon_r2
-from . import data, viz
+from . import data, kernels, viz
 
 __all__ = [
     'BSF', 'VanillaBSF', 'GrassmannianBSF', 'GroupLassoBSF',
-    'train', 'recon_r2', 'data', 'viz',
+    'train', 'recon_r2', 'data', 'kernels', 'viz',
 ]

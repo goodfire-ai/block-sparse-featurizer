@@ -6,6 +6,8 @@ kept (no magnitude shrinkage, which collapses under a norm-constrained decoder).
 theta is learned by a straight-through estimator -- the block analogue of
 JumpReLU: the gate H(||a_g|| - theta) is exact in the forward pass and a kernel
 `K` evaluated at ||a_g|| - theta carries the gradient in the backward pass.
+
+`K` is selectable (`bsf.kernels`) and gaussian by default.
 """
 import math
 
@@ -15,32 +17,28 @@ import torch.nn.functional as F
 from einops import rearrange
 
 from .base import BSF, unit_blocks
-
-
-def cauchy_kernel(x, bandwidth):
-    """Cauchy kernel, unit mass: 1 / (1 + (x/h)^2) / (pi*h),  h = bandwidth/2."""
-    h = bandwidth / 2
-    return 1.0 / (1.0 + (x / h) ** 2) / (math.pi * h)
+from .kernels import gaussian_kernel, get_kernel
 
 
 class BlockJumpReLU(torch.autograd.Function):
-    """Hard block gate H(||a_g|| - theta) with a Cauchy pseudo-derivative.
+    """Hard block gate H(||a_g|| - theta) with a kernel pseudo-derivative.
 
     Backward sends -K to theta and +K to ||a_g||: the gate is forward-exact and
     both of its arguments receive the derivative of the kernel-smoothed gate.
     """
 
     @staticmethod
-    def forward(ctx, gn, theta, bandwidth):
+    def forward(ctx, gn, theta, bandwidth, kernel=None):
         ctx.save_for_backward(gn, theta)
         ctx.bw = float(bandwidth)
+        ctx.kernel = kernel or gaussian_kernel
         return (gn > theta).to(gn.dtype)
 
     @staticmethod
     def backward(ctx, g):
         gn, theta = ctx.saved_tensors
-        gk = g * cauchy_kernel(gn - theta, ctx.bw)
-        return gk, -gk.sum(0), None
+        gk = g * ctx.kernel(gn - theta, ctx.bw)
+        return gk, -gk.sum(0), None, None
 
 
 class GroupLassoBSF(BSF):
@@ -50,6 +48,9 @@ class GroupLassoBSF(BSF):
         target_l0: requested mean number of active blocks per token. Enforced as
             a constraint by dual ascent, not by hand-tuning `coef`.
         bandwidth: JumpReLU kernel bandwidth, as a multiple of std(||a_g||).
+        kernel: name (see `bsf.kernels.KERNELS`) or callable for the JumpReLU
+            pseudo-derivative. Gaussian by default; the heavier-tailed cauchy
+            leaves several times as many blocks dead at the same sparsity.
         coef: initial value of the Lagrange multiplier (the dual variable finds
             its own level from here; this is not a sparsity knob).
         dual_lr: step size for dual ascent on log(lambda).
@@ -64,6 +65,7 @@ class GroupLassoBSF(BSF):
         target_l0=16,
         gain=10.0,
         bandwidth=0.25,
+        kernel='gaussian',
         dual_lr=3e-2,
     ):
         super().__init__(d, n_groups, group_size)
@@ -71,6 +73,8 @@ class GroupLassoBSF(BSF):
         self.target_l0 = target_l0
         self.gain = gain
         self.bw_mult = float(bandwidth)
+        self.kernel_name = kernel if isinstance(kernel, str) else kernel.__name__
+        self.kernel = get_kernel(kernel)
         self.dual_lr = dual_lr
 
         W = unit_blocks(torch.randn(n_groups * group_size, d), n_groups, group_size)
@@ -107,7 +111,8 @@ class GroupLassoBSF(BSF):
                 # same thing as the encoder grows
                 self.bandwidth.mul_(0.99).add_(
                     0.01 * gn.detach().std().clamp_min(1e-6) * self.bw_mult)
-        return BlockJumpReLU.apply(gn, self.theta(), float(self.bandwidth))
+        return BlockJumpReLU.apply(gn, self.theta(), float(self.bandwidth),
+                                   self.kernel)
 
     @torch.no_grad()
     def dual_step(self, l0):

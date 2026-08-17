@@ -38,7 +38,7 @@ The internal coordinate is precisely what SAEs discard — it is what gives BSFs
 |---|---|---|---|
 | **Vanilla BSF** | Free linear `(W, b)` | Block TopK (keep `l0` blocks of largest norm) | Free `D` |
 | **Grassmannian BSF** | Tied: `z_g = γ · x Dg^T` | Block TopK | Orthonormal frames `Dg Dg^T = I` |
-| **Group Lasso BSF** | Free linear `(W, b)` | Block soft-threshold `sh_θ` | Free `D` |
+| **Group Lasso BSF** | Free linear `(W, b)` | Block JumpReLU gate `H(‖a_g‖ − θ)`, θ learned by STE; sparsity set as a target L0 | Free `D` |
 
 All three subclass `bsf.BSF` and share a single interface (`encode` / `loss` / decoder), so one trainer and one visualizer work for all of them.
 
