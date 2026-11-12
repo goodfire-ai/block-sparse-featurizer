@@ -39,6 +39,8 @@ def train(model, x, *, epochs=40, lr=4e-4, batch_size=2048, snr=0.1,
     model.to(device)
     x = torch.as_tensor(x, dtype=torch.float32)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+    # fewer rows than one batch: train on all of them instead of on nothing
+    batch_size = min(batch_size, x.shape[0])
     n_batches_per_epoch = max(1, x.shape[0] // batch_size)
     total_steps = epochs * n_batches_per_epoch
     sched = torch.optim.lr_scheduler.OneCycleLR(
